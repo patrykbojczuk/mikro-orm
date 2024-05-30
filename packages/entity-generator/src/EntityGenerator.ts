@@ -46,7 +46,7 @@ export class EntityGenerator {
 
   async generate(options: GenerateOptions = {}): Promise<string[]> {
     options = Utils.mergeConfig({}, this.config.get('entityGenerator'), options);
-    const schema = await DatabaseSchema.create(this.connection, this.platform, this.config);
+    const schema = await DatabaseSchema.create(this.connection, this.platform, this.config, undefined, undefined, options.takeTables, options.skipTables);
     const metadata = await this.getEntityMetadata(schema, options);
     const defaultPath = `${this.config.get('baseDir')}/generated-entities`;
     const baseDir = Utils.normalizePath(options.path ?? defaultPath);
@@ -77,7 +77,7 @@ export class EntityGenerator {
         const skipColumns = options.skipColumns?.[table.getShortestName()];
         if (skipColumns) {
           table.getColumns().forEach(col => {
-            if (skipColumns.some(matchColumnName => this.matchName(col.name, matchColumnName))) {
+            if (skipColumns.some(matchColumnName => this.matchColumnName(col.name, matchColumnName))) {
               table.removeColumn(col.name);
             }
           });
@@ -87,15 +87,12 @@ export class EntityGenerator {
 
     for (const meta of metadata) {
       for (const prop of meta.relations) {
-        if (!this.isTableNameAllowed(prop.referencedTableName, options)) {
+        if (!metadata.some((table) => table.tableName === prop.referencedTableName)) {
           prop.kind = ReferenceKind.SCALAR;
-          const meta2 = metadata.find(m => m.className === prop.type)!;
-          prop.type = meta2.getPrimaryProps().map(pk => pk.type).join(' | ');
+          prop.type = prop.columnTypes.map(colType => this.platform.getMappedType(colType).compareAsType()).join(' | ');
         }
       }
     }
-
-    metadata = metadata.filter(table => this.isTableNameAllowed(table.tableName, options));
 
     await options.onInitialMetadata?.(metadata, this.platform);
 
@@ -132,17 +129,10 @@ export class EntityGenerator {
     return metadata;
   }
 
-  private matchName(name: string, nameToMatch: string | RegExp) {
+  private matchColumnName(name: string, nameToMatch: string | RegExp) {
     return typeof nameToMatch === 'string'
       ? name.toLocaleLowerCase() === nameToMatch.toLocaleLowerCase()
       : nameToMatch.test(name);
-  }
-
-  private isTableNameAllowed(tableName: string, { takeTables, skipTables }: GenerateOptions) {
-    return (
-      (takeTables?.some(tableNameToMatch => this.matchName(tableName, tableNameToMatch)) ?? true) &&
-      !(skipTables?.some(tableNameToMatch => this.matchName(tableName, tableNameToMatch)) ?? false)
-    );
   }
 
   private detectManyToManyRelations(metadata: EntityMetadata[], onlyPurePivotTables: boolean, readOnlyPivotTables: boolean): void {

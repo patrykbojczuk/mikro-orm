@@ -124,6 +124,57 @@ await connection.transactional(async (tx) => {
 });
 ```
 
+## How other tools handle this
+
+All major migration tools support targeting a custom schema at runtime via `search_path` — migration files stay schema-agnostic.
+
+### Flyway (`flyway.defaultSchema`)
+
+Dedicated migration-specific option. Before each migration, Flyway executes `SELECT set_config('search_path', ?, false)` on the PostgreSQL connection.
+
+- Source: [`PostgreSQLConnection.java`](https://github.com/flyway/flyway/blob/main/flyway-database/flyway-database-postgresql/src/main/java/org/flywaydb/database/postgresql/PostgreSQLConnection.java) — `doChangeCurrentSchemaOrSearchPathTo()` calls `set_config('search_path', ...)`
+- Source: [`DbMigrate.java`](https://github.com/flyway/flyway/blob/main/flyway-core/src/main/java/org/flywaydb/core/internal/command/DbMigrate.java) — `connectionUserObjects.changeCurrentSchemaTo(schema)` called before each migration
+- Docs: [Flyway Default Schema Setting](https://documentation.red-gate.com/fd/flyway-default-schema-setting-277578987.html) — "This schema will also be the default for the database connection"
+- Confirmation: [flyway/flyway#3493](https://github.com/flyway/flyway/issues/3493) — since 8.5.0, `defaultSchema` controls both history table and migration execution schema
+
+### Liquibase (`--default-schema-name`)
+
+Dedicated migration-specific option. Sets `search_path` on the database connection so all changesets without explicit `schemaName` target it.
+
+- Docs: [update command](https://docs.liquibase.com/commands/update/update.html) — "Name of the default schema to use for the database connection. If defaultSchemaName is set, then objects do not have to be fully qualified."
+- Confirmation: [liquibase/liquibase#3312](https://github.com/liquibase/liquibase/issues/3312) — confirms `SET SEARCH_PATH TO` mechanism
+- Maintainer quote: "Just the global defaultSchemaName that applies to all changeSets that don't have a schema specified." — [forum](https://forum.liquibase.org/t/how-to-specify-the-default-schema-name-within-a-changelog/2745)
+
+### Rails (`schema_search_path` in `database.yml`)
+
+Connection-level config. On every connection, Rails executes `SET search_path TO <configured value>`. All migrations run on that connection inherit the search path.
+
+- Source: [`schema_statements.rb#L307-L311`](https://github.com/rails/rails/blob/cb91d817a78352fb41e33764d651991d566ae82b/activerecord/lib/active_record/connection_adapters/postgresql/schema_statements.rb#L307-L311) — `query_command("SET search_path TO #{schema_csv}")`
+- Source: [`postgresql_adapter.rb#L1036`](https://github.com/rails/rails/blob/cb91d817a78352fb41e33764d651991d566ae82b/activerecord/lib/active_record/connection_adapters/postgresql_adapter.rb#L1036) — `self.schema_search_path = @config[:schema_search_path]` in `configure_connection`
+- Confirmation: [rails/rails#56378](https://github.com/rails/rails/issues/56378) — bug report when `schema_search_path` stopped being reapplied after reconnect, treated as critical
+
+### Django (`OPTIONS` with `-c search_path=...`)
+
+Connection-level config. Django forwards `OPTIONS` to `psycopg.connect()`, and libpq's `-c search_path=myschema` sets the session search_path at connection start.
+
+- Source: [`postgresql/base.py#L265-L314`](https://github.com/django/django/blob/1ce6e78dd4beed702f15fa0be798dd17a15d4ba8/django/db/backends/postgresql/base.py#L246-L314) — `conn_params = { **settings_dict["OPTIONS"] }` then `Database.connect(**conn_params)`
+- libpq docs: [connection parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) — `options`: "Specifies command-line options to send to the server at connection start"
+- Django docs: [databases reference](https://docs.djangoproject.com/en/5.2/ref/databases/) — "The PostgreSQL backend passes the content of OPTIONS as keyword arguments to the connection constructor"
+- Ticket: [Django #28774](https://code.djangoproject.com/ticket/28774) — maintainer acknowledged this approach
+
+### Sequelize (`searchPath` + `prependSearchPath: true`)
+
+Per-query config. When enabled, Sequelize prepends `SET search_path to <schema>;` to every SQL statement before execution.
+
+- Source: [`query-generator.js`](https://github.com/sequelize/sequelize/blob/main/packages/postgres/src/query-generator.js) — `setSearchPath(searchPath) { return \`SET search_path to ${searchPath};\` }`
+- Source: [`query.js`](https://github.com/sequelize/sequelize/blob/main/packages/postgres/src/query.js) — prepends `SET search_path` to SQL when `searchPath` is non-empty
+- Original PR: [sequelize/sequelize#4534](https://github.com/sequelize/sequelize/pull/4534) — introduced the feature
+- Bug confirming runtime execution: [sequelize/sequelize#14062](https://github.com/sequelize/sequelize/issues/14062) — unquoted schema names in `SET search_path` caused syntax errors, proving the SQL is actually sent
+
+### Key takeaway
+
+MikroORM is the outlier. Every other major tool supports running migrations against a custom schema via `search_path` at runtime. Flyway and Liquibase both have dedicated migration-specific schema options — exactly the `migrations.schema` pattern proposed for MikroORM.
+
 ## Suggested fix for MikroORM
 
 When `schema` is set in config, set `search_path` to that schema before executing migration SQL.

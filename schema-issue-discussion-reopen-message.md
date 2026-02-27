@@ -74,6 +74,20 @@ await connection.transactional(async (tx) => {
 });
 ```
 
+## How other tools handle this
+
+Other migration tools solve this by setting `search_path` on the database connection at migration runtime — migration files stay schema-agnostic, the target schema is determined by config:
+
+| Tool | Config | Mechanism | Proof |
+|---|---|---|---|
+| **Flyway** | `flyway.defaultSchema` | Executes `SELECT set_config('search_path', ?, false)` before each migration | [source](https://github.com/flyway/flyway/blob/main/flyway-database/flyway-database-postgresql/src/main/java/org/flywaydb/database/postgresql/PostgreSQLConnection.java), [docs](https://documentation.red-gate.com/fd/flyway-default-schema-setting-277578987.html) |
+| **Liquibase** | `--default-schema-name` | Sets `search_path` on the connection; all changesets without explicit schema use it | [docs](https://docs.liquibase.com/commands/update/update.html), [issue](https://github.com/liquibase/liquibase/issues/3312) |
+| **Rails** | `schema_search_path` in `database.yml` | Executes `SET search_path TO ...` on connection setup | [source](https://github.com/rails/rails/blob/cb91d817a78352fb41e33764d651991d566ae82b/activerecord/lib/active_record/connection_adapters/postgresql/schema_statements.rb#L307-L311) |
+| **Django** | `OPTIONS: { options: '-c search_path=...' }` | Forwards to libpq which sets `search_path` at connection start | [source](https://github.com/django/django/blob/1ce6e78dd4beed702f15fa0be798dd17a15d4ba8/django/db/backends/postgresql/base.py#L246-L314), [docs](https://docs.djangoproject.com/en/5.2/ref/databases/) |
+| **Sequelize** | `searchPath` + `prependSearchPath: true` | Prepends `SET search_path to ...;` before every query | [source](https://github.com/sequelize/sequelize/blob/main/packages/postgres/src/query-generator.js), [PR](https://github.com/sequelize/sequelize/pull/4534) |
+
+Notably, Flyway and Liquibase both have **dedicated migration-specific schema options** — exactly the pattern I'm suggesting for MikroORM.
+
 ## Suggestion: a new migration option
 
 If you find this breaking, instead of changing the existing `schema` behavior, a dedicated option like `migrations.schema` (or similar) could control the `search_path` when running migrations.

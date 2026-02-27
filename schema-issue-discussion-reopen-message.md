@@ -1,4 +1,4 @@
-Hi @B4nan, I wanted to revisit this with a more detailed explanation of the use case, because I think it got mixed up with the wildcard/multi-tenant pattern during our previous conversation.
+Hi @B4nan, I wanted to revisit this with a more detailed explanation of the use case, as I think I might not have explained it clearly enough last time.
 
 ## Use case: PR preview environments
 
@@ -76,7 +76,7 @@ await connection.transactional(async (tx) => {
 
 ## Suggestion: a new migration option
 
-Instead of changing the existing `schema` behavior, a dedicated option like `migrations.schema` (or similar) could control the `search_path` when running migrations.
+If you find this breaking, instead of changing the existing `schema` behavior, a dedicated option like `migrations.schema` (or similar) could control the `search_path` when running migrations.
 
 - If left `undefined` — current behavior, nothing changes, fully backwards-compatible
 - If set — `search_path` is set to that value before executing migration SQL
